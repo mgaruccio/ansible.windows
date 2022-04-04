@@ -103,8 +103,13 @@ if ($path_qualifier -eq "HKCC:" -and (-not (Test-Path -LiteralPath HKCC:\))) {
     New-PSDrive -Name HKCC -PSProvider Registry -Root HKEY_CURRENT_CONFIG > $null
 }
 
+# We import the ActiveDirectory module only if required for working with AD
+if ($path_qualifier -eq "AD:") {
+    Import-module ActiveDirectory
+}
+
 If (-Not (Test-Path -LiteralPath $path)) {
-    Fail-Json -obj $result -message "$path file or directory does not exist on the host"
+    Fail-Json -obj $result -message "$path file, directory, registry key, or active directory object does not exist on the host"
 }
 
 # Test that the user/group is resolvable on the local machine
@@ -132,6 +137,9 @@ Try {
     If ($path_item.PSProvider.Name -eq "Registry") {
         $colRights = [System.Security.AccessControl.RegistryRights]$rights
     }
+    ElseIf ($path_item.PSProvider.Name -eq "ActiveDirectory") {
+        $colRights = [System.DirectoryServices.ActiveDirectoryRights]$rights
+    }
     Else {
         $colRights = [System.Security.AccessControl.FileSystemRights]$rights
     }
@@ -149,6 +157,9 @@ Try {
     $objUser = New-Object System.Security.Principal.SecurityIdentifier($sid)
     If ($path_item.PSProvider.Name -eq "Registry") {
         $objACE = New-Object System.Security.AccessControl.RegistryAccessRule ($objUser, $colRights, $InheritanceFlag, $PropagationFlag, $objType)
+    }
+    ElseIf ($path_item.PSProvider.Name -eq "ActiveDirectory") {
+        $objACE = New-Object System.DirectoryServices.ActiveDirectoryAccessRule($objUser, $colRights, $objType, $InheritanceFlag)
     }
     Else {
         $objACE = New-Object System.Security.AccessControl.FileSystemAccessRule ($objUser, $colRights, $InheritanceFlag, $PropagationFlag, $objType)
@@ -173,6 +184,18 @@ Try {
                 Break
             }
         }
+        ElseIf ($path_item.PSProvider.Name -eq "ActiveDirectory") {
+            If (
+                ($rule.ActiveDirectoryRights -eq $objACE.ActiveDirectoryRights) -And
+                ($rule.AccessControlType -eq $objACE.AccessControlType) -And
+                ($rule.IdentityReference -eq $objACE.IdentityReference) -And
+                ($rule.IsInherited -eq $objACE.IsInherited) -And
+                ($rule.InheritanceFlags -eq $objACE.InheritanceFlags)
+            ) {
+                $match = $true
+                Break
+            }
+        }
         else {
             If (
                 ($rule.FileSystemRights -eq $objACE.FileSystemRights) -And
@@ -191,7 +214,7 @@ Try {
     If ($state -eq "present" -And $match -eq $false) {
         Try {
             $objACL.AddAccessRule($objACE)
-            If ($path_item.PSProvider.Name -eq "Registry") {
+            If ($path_item.PSProvider.Name -eq "Registry" -or $path_item.PSProvider.Name -eq "ActiveDirectory") {
                 Set-ACL -LiteralPath $path -AclObject $objACL
             }
             else {
@@ -206,7 +229,7 @@ Try {
     ElseIf ($state -eq "absent" -And $match -eq $true) {
         Try {
             $objACL.RemoveAccessRule($objACE)
-            If ($path_item.PSProvider.Name -eq "Registry") {
+            If ($path_item.PSProvider.Name -eq "Registry" -or $path_item.PSProvider.Name -eq "ActiveDirectory") {
                 Set-ACL -LiteralPath $path -AclObject $objACL
             }
             else {
